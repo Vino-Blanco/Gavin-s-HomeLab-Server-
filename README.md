@@ -1,4 +1,4 @@
-#My HomeLab Server
+# My HomeLab Server
 
 A production-style homelab built on Proxmox VE, featuring network segmentation with VLANs, a virtualized OPNsense firewall/router, and containerized services — designed to mirror real-world enterprise infrastructure.
 
