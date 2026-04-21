@@ -53,7 +53,6 @@ Deployed OPNsense 25.1 as VM 101, functioning as the network's firewall, router,
 - Web UI: http://10.0.10.1 (Trusted VLAN)
 - DNS: Unbound with DNSSEC enabled
 - DHCP: Configured on VLANs 10, 20, 30, 40 (range .100-.200 each)
-- Firewall: Pass-all rules on each VLAN (to be locked down in a future phase)
 
 ---
 
@@ -74,24 +73,65 @@ Configured 802.1Q VLAN segmentation across OPNsense, the Netgear JGS516PE manage
 ---
 
 ## Phase 6 — Firewall Lockdown
-**Status:** ⏳ Planned
+**Status:** ✅ Complete
 
-Replace pass-all firewall rules with restrictive policies:
-- Trusted: Full access to all VLANs and internet
-- Lab: Internet access, limited access to Trusted
-- IoT: Internet only, no inter-VLAN access
-- Guest: Internet only, fully isolated
+Replaced pass-all firewall rules with restrictive per-VLAN policies. Each VLAN now has explicit allow/deny rules controlling inter-VLAN access and internet connectivity.
+
+**Policy summary:**
+- **Trusted (VLAN 10):** Full access to all VLANs and internet
+- **Lab (VLAN 20):** Internet access, access to Trusted and OPNsense management, blocked from IoT and Guest
+- **IoT (VLAN 30):** Internet only — blocked from all other VLANs and OPNsense
+- **Guest (VLAN 40):** Internet only — fully isolated from all other VLANs and OPNsense
+
+**Verification:** Tested inter-VLAN connectivity from Lab VLAN using ping to confirm blocks are enforced.
 
 ---
 
 ## Phase 7 — Monitoring Stack
-**Status:** ⏳ Planned
+**Status:** ✅ Complete
 
-Deploy Grafana + InfluxDB + Telegraf for infrastructure monitoring — CPU, RAM, disk, network traffic across all VMs and the Proxmox host.
+Deployed a full infrastructure monitoring stack using Docker Compose at /opt/monitoring/. The stack provides metrics collection, visualization, SNMP network monitoring, and service availability monitoring.
+
+**Components deployed:**
+- **Prometheus** (port 9090) — metrics scraping and storage with 30-day retention
+- **Node Exporter** (port 9100) — Linux host metrics (CPU, RAM, disk, network)
+- **SNMP Exporter** (port 9116) — OPNsense interface metrics via SNMP v2c
+- **Grafana** (port 3000) — dashboard visualization with two data sources (Prometheus + Loki)
+- **Uptime Kuma** (port 3001) — service availability monitoring with 7 active monitors
+
+**Grafana dashboards:**
+- Node Exporter Full (imported, ID 1860) — comprehensive Linux host metrics
+- OPNsense Monitoring (custom) — per-interface traffic with friendly names (WAN, Trusted, Lab, IoT, Guest) via Prometheus metric_relabel_configs
+
+**SNMP details:**
+- OPNsense Net-SNMP plugin (v2c)
+- Official default SNMP Exporter config (61k lines, if_mib module)
+- Interface names relabeled from raw IDs (vtnet0, vlan01) to friendly names in Prometheus
 
 ---
 
-## Phase 8 — Active Directory Lab
+## Phase 8 — Log Aggregation
+**Status:** ✅ Complete
+
+Deployed centralized log aggregation using Grafana Loki and Grafana Alloy (replaced Promtail, which reached EOL March 2026). Collects Docker container logs and OPNsense firewall logs in a single searchable system.
+
+**Components deployed:**
+- **Loki** (port 3100) — log storage with label-based indexing and 7-day retention
+- **Grafana Alloy** (port 12345, UDP 5514) — unified log collection agent
+
+**Log sources:**
+- Docker container logs — auto-discovered via Docker socket, labeled per container
+- OPNsense firewall logs — received via UDP syslog on port 5514, parsed as RFC3164 (BSD format)
+
+**Grafana dashboards:**
+- Docker Logs (custom) — live log stream, filtered error logs, log volume by container
+- OPNsense syslog queryable in Grafana Explore with LogQL
+
+**Design decision:** Chose Grafana Alloy over Promtail because Promtail reached end-of-life in March 2026. Alloy is the current, actively maintained replacement with broader capabilities (metrics, logs, traces) and a built-in web UI for pipeline visualization.
+
+---
+
+## Phase 9 — Active Directory Lab
 **Status:** ⏳ Planned
 
 Rebuild the Active Directory lab from VirtualBox inside Proxmox with proper VLAN segmentation.

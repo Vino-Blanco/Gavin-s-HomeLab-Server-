@@ -1,17 +1,17 @@
 # Network Architecture
 
-This document describes the complete network topology, design decisions, and how traffic flows through the homelab.
+This document describes the complete network design, including the two-subnet layout, VLAN segmentation, firewall policies, and monitoring data flows.
 
 ---
 
-## Design Overview
+## Two-Subnet Design
 
-The network uses a **two-subnet architecture** to separate management/WAN traffic from internal lab traffic:
+The network is split into two distinct subnets:
 
-- **WAN subnet (192.168.0.0/24):** The Cox router side — Proxmox management, OPNsense WAN uplink, and switch management (VLAN 1)
-- **LAN subnets (10.0.x.0/24):** Behind OPNsense — all lab devices segmented into VLANs
+- **WAN (192.168.0.0/24):** The Cox router side. Proxmox management (192.168.0.50), OPNsense WAN interface (192.168.0.135 via DHCP), and switch management (192.168.0.239) live here.
+- **LAN (10.0.x.0/24):** Behind OPNsense. All lab devices are segmented into VLANs on the 10.0.x.0/24 address space.
 
-OPNsense acts as the gateway between the two, performing NAT, firewall filtering, DHCP, and DNS for all LAN VLANs.
+This separation exists because the Cox router and OPNsense WAN are on the same physical network. Putting the LAN on the same subnet caused routing conflicts in Proxmox.
 
 ---
 
@@ -22,138 +22,117 @@ Internet
     |
 Cox Router (192.168.0.1)
     |
-    ├── Wi-Fi: Gaming PC (192.168.0.128) — Proxmox mgmt access
+eno1 → vmbr0 — Proxmox Node (192.168.0.50)
     |
-    └── Ethernet (eno1): Proxmox Node (192.168.0.50)
-                              |
-                         vmbr0 (WAN)
-                              |
-                    OPNsense WAN (192.168.0.135)
-                    OPNsense LAN (vtnet1) ←── vmbr1 (VLAN-aware)
-                                                    |
-                                              enp2s0f0 (I350 f0)
-                                                    |
-                                          JGS516PE Switch
-                                           ├── Port 1: Trunk
-                                           ├── Port 2: Gaming PC (VLAN 10)
-                                           └── Ports 3-16: Available
+OPNsense WAN — vtnet0/net0 (192.168.0.135 via DHCP)
+
+OPNsense LAN — vtnet1/net1 (trunks=10;20;30;40)
+    → vmbr1 (VLAN aware, PVID 1)
+    → enp2s0f0 (I350-AM2 NIC)
+    |
+JGS516PE Switch (802.1Q enabled, mgmt 192.168.0.239 on VLAN 1)
+    ├── Port 1 — Trunk (T on VLANs 10,20,30,40 / U on VLAN 1)
+    ├── Port 2 — Gaming PC (VLAN 10 Trusted — 10.0.10.10)
+    └── Port 3+ — future devices
+
+Ubuntu Server VM — net0 (tag=20) → vmbr1 → VLAN 20 (10.0.20.20)
+    ├── Docker: prometheus (9090)
+    ├── Docker: node-exporter (9100)
+    ├── Docker: snmp-exporter (9116)
+    ├── Docker: grafana (3000)
+    ├── Docker: uptime-kuma (3001)
+    ├── Docker: loki (3100)
+    ├── Docker: alloy (12345, 5514/udp)
+    └── Docker: portainer (9000)
 ```
 
 ---
 
-## VLAN Design
+## VLAN Layout
 
-Each VLAN gets a /24 subnet with the VLAN ID embedded in the third octet for easy identification.
-
-| VLAN ID | Name | Subnet | Gateway | DHCP Range | Purpose |
-|---------|------|--------|---------|------------|---------|
-| 1 | Switch Mgmt | 192.168.0.0/24 | N/A | N/A | Switch management (untagged) |
-| 10 | Trusted | 10.0.10.0/24 | 10.0.10.1 | .100-.200 | Personal devices |
-| 20 | Lab | 10.0.20.0/24 | 10.0.20.1 | .100-.200 | Lab VMs and services |
-| 30 | IoT | 10.0.30.0/24 | 10.0.30.1 | .100-.200 | Smart home devices |
-| 40 | Guest | 10.0.40.0/24 | 10.0.40.1 | .100-.200 | Guest/untrusted devices |
-
----
-
-## IP Assignments
-
-### WAN Subnet (192.168.0.0/24)
-| Device | IP | Notes |
-|--------|----|-------|
-| Cox Router | 192.168.0.1 | ISP gateway |
-| Proxmox | 192.168.0.50 | Management UI (vmbr0) |
-| OPNsense WAN | 192.168.0.135 | DHCP from Cox router |
-| Gaming PC Wi-Fi | 192.168.0.128 | DHCP, used for Proxmox mgmt |
-| JGS516PE Switch | 192.168.0.239 | Management IP (VLAN 1) |
-
-### VLAN 10 — Trusted
-| Device | IP | Notes |
-|--------|----|-------|
-| OPNsense | 10.0.10.1 | Gateway |
-| Gaming PC | 10.0.10.10 | Switch Port 2 |
-
-### VLAN 20 — Lab
-| Device | IP | Notes |
-|--------|----|-------|
-| OPNsense | 10.0.20.1 | Gateway |
-| Ubuntu Server | 10.0.20.20 | VM 100 (tag=20) |
+| VLAN ID | Name | Subnet | Gateway | Purpose |
+|---------|------|--------|---------|----------|
+| 1 | Switch Mgmt | 192.168.0.0/24 | N/A | Untagged switch management (firmware limitation) |
+| 10 | Trusted | 10.0.10.0/24 | 10.0.10.1 | Personal devices (full access) |
+| 20 | Lab | 10.0.20.0/24 | 10.0.20.1 | Lab VMs and monitoring stack |
+| 25 | Production | 10.0.25.0/24 | 10.0.25.1 | Future production services |
+| 30 | IoT | 10.0.30.0/24 | 10.0.30.1 | IoT devices (internet only) |
+| 40 | Guest | 10.0.40.0/24 | 10.0.40.1 | Guest devices (fully isolated) |
+| 50 | Security Cams | 10.0.50.0/24 | 10.0.50.1 | Future camera network |
 
 ---
 
-## Traffic Flow Examples
+## OPNsense Interface Assignments
 
-### Gaming PC → Internet
-```
-Gaming PC (10.0.10.10)
- → Switch Port 2 (untagged, PVID 10)
-  → Switch tags as VLAN 10
-   → Port 1 trunk (tagged VLAN 10)
-    → enp2s0f0 → vmbr1
-     → OPNsense vtnet1 (trunk)
-      → OPNsense Trusted interface (10.0.10.1)
-       → Firewall check: pass
-        → NAT → WAN (192.168.0.135)
-         → Cox Router → Internet
-```
-
-### Gaming PC → Ubuntu Server (Inter-VLAN)
-```
-Gaming PC (10.0.10.10)
- → Default gateway: 10.0.10.1 (OPNsense)
-  → OPNsense: route 10.0.20.20 → Lab interface
-   → Firewall check: pass
-    → OPNsense sends via VLAN 20
-     → vmbr1 delivers to VM 100 (tag=20)
-      → Ubuntu Server (10.0.20.20)
-```
+| ifName | OPNsense Name | Role | VLAN Tag |
+|--------|--------------|------|----------|
+| vtnet0 | WAN | WAN uplink to Cox router | — |
+| vtnet1 | LAN | LAN trunk to switch (VLAN parent) | — |
+| vtnet2 | OPT1 | Unused | — |
+| vlan01 | Trusted | VLAN 10 sub-interface | 10 |
+| vlan02 | Lab | VLAN 20 sub-interface | 20 |
+| vlan03 | IoT | VLAN 30 sub-interface | 30 |
+| vlan04 | Guest | VLAN 40 sub-interface | 40 |
 
 ---
 
-## Proxmox Virtual Networking
+## Firewall Rules
 
-### Bridge Configuration
-| Bridge | Physical NIC | Purpose | VLAN Aware |
-|--------|-------------|---------|------------|
-| vmbr0 | nic0/eno1 | WAN — Cox router uplink | No |
-| vmbr1 | enp2s0f0/f0 | LAN — VLAN trunk to switch | Yes |
-| vmbr2 | enp2s0f1/f1 | OPT1 — unused | No |
+### Trusted (VLAN 10)
+1. Pass — Trusted net → any — Allow all Trusted traffic
 
-### vmbr1 Configuration
-```
-auto vmbr1
-iface vmbr1 inet manual
-        bridge-ports enp2s0f0
-        bridge-stp off
-        bridge-fd 0
-        bridge-vlan-aware yes
-        bridge-vids 1-4094
-        bridge-pvid 1
-```
+### Lab (VLAN 20)
+1. Pass — Lab net → OPNsense GUI (TCP 443, This Firewall)
+2. Pass — Lab net → This Firewall (ICMP)
+3. Pass — Lab net → Trusted net
+4. Block — Lab net → IoT net
+5. Block — Lab net → Guest net
+6. Pass — Lab net → any (internet access)
 
-### VM Port Assignments
-| VM | Port Type | Proxmox Config | Behavior |
-|----|-----------|---------------|----------|
-| OPNsense (net1) | Trunk | trunks=10;20;30;40 | Receives all VLANs tagged |
-| Ubuntu Server (net0) | Access | tag=20 | Receives VLAN 20 only, untagged |
+### IoT (VLAN 30)
+1. Block — IoT net → Trusted net
+2. Block — IoT net → Lab net
+3. Block — IoT net → Guest net
+4. Block — IoT net → This Firewall
+5. Pass — IoT net → any (internet access)
 
----
-
-## Switch Configuration (JGS516PE)
-
-| Port | Connected To | VLAN Config | PVID |
-|------|-------------|-------------|------|
-| 1 | EliteDesk f0 | T: 10,20,30,40 / U: VLAN 1 | 1 |
-| 2 | Gaming PC | U: VLAN 10 | 10 |
-| 3-16 | Available | Default (VLAN 1) | 1 |
+### Guest (VLAN 40)
+1. Block — Guest net → Trusted net
+2. Block — Guest net → Lab net
+3. Block — Guest net → IoT net
+4. Block — Guest net → This Firewall
+5. Pass — Guest net → any (internet access)
 
 ---
 
-## Design Decisions
+## Monitoring Data Flows
 
-**Why two subnets?** Proxmox management (vmbr0) and OPNsense WAN both need to reach the Cox router on 192.168.0.0/24. Placing LAN traffic on a separate 10.0.x.0/24 range avoids routing conflicts and provides clean separation.
+### Metrics Flow
+```
+Node Exporter (host metrics) ──┐
+                               ├──→ Prometheus (scrapes every 15s) ──→ Grafana
+SNMP Exporter ←── SNMP v2c ──→ OPNsense
+```
 
-**Why router-on-a-stick?** A single trunk carries all VLANs between OPNsense and the switch. This is simpler than dedicating a physical NIC per VLAN and mirrors how enterprise networks handle inter-VLAN routing.
+Prometheus scrapes three jobs: itself, Node Exporter, and OPNsense via SNMP Exporter. SNMP queries use the Lab gateway IP (10.0.20.1) since the Ubuntu Server is on VLAN 20.
 
-**Why VLAN-aware on vmbr1?** Without VLAN-aware, the bridge passes all traffic transparently but cannot assign VMs to specific VLANs. With VLAN-aware enabled, Proxmox acts as a virtual managed switch — OPNsense gets a trunk port, and other VMs get access ports on specific VLANs.
+### Logs Flow
+```
+Docker containers ──→ Alloy (Docker socket discovery) ──┐
+                                                        ├──→ Loki ──→ Grafana
+OPNsense ──→ UDP syslog (5514) ──→ Alloy (RFC3164) ─────┘
+```
 
-**Why PVID 1 on vmbr1?** The switch management interface uses VLAN 1 (untagged). Without `bridge-pvid 1`, the VLAN-aware bridge drops untagged traffic, making the switch unreachable.
+Grafana Alloy collects logs from two sources: Docker containers (auto-discovered via the Docker socket) and OPNsense (via UDP syslog on port 5514, parsed as RFC3164/BSD format). Both streams are shipped to Loki and queryable in Grafana using LogQL.
+
+### Availability Monitoring
+```
+Uptime Kuma ──→ HTTP checks every 60s
+    ├── Grafana (10.0.20.20:3000)
+    ├── Node Exporter (10.0.20.20:9100)
+    ├── Prometheus (10.0.20.20:9090)
+    ├── OPNsense (10.0.20.1:80)
+    ├── Proxmox (192.168.0.50:8006)
+    ├── Loki (10.0.20.20:3100)
+    └── Alloy (10.0.20.20:12345)
+```

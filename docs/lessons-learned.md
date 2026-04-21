@@ -24,6 +24,9 @@ The switch management interface uses VLAN 1 (untagged). When I enabled VLAN-awar
 ### The switch has no direct path to the router
 The JGS516PE is only connected to the EliteDesk via Port 1. It has no direct cable to the Cox router. This means switch management traffic must flow through vmbr1 — so any change to vmbr1 (like enabling VLAN-aware) can cut off switch management access.
 
+### Traffic to the firewall vs through the firewall
+OPNsense treats traffic destined *to* the firewall itself differently from traffic passing *through* it. If you want a VLAN to access the OPNsense web UI, you need a rule allowing traffic to "This Firewall" — a general internet pass rule won't cover it.
+
 ---
 
 ## Proxmox
@@ -52,10 +55,47 @@ The Netgear "Smart Managed Plus" series doesn't allow you to change which VLAN t
 
 ---
 
+## Monitoring
+
+### SNMP Exporter needs the full official config
+I initially wrote a custom 14-line snmp.yml config for the SNMP Exporter. It started and scraped, but only returned scrape-health metrics — no real interface data. The fix was extracting the full 61k-line official default config from the container image using `docker create` + `docker cp` (not from a running container, since bind mounts override the file). The official config contains the proper OID-to-metric mappings needed for real data.
+
+### Docker bind mounts override container files
+Running `docker cp` from a running container copies the *mounted* file, not the original from the image. To get the real default config, create a temporary container without starting it (`docker create`), copy the file, then remove the container.
+
+### Prometheus metric_relabel_configs only apply to new data
+When you rename labels via metric_relabel_configs, the old data in Prometheus still has the original labels. This means you'll temporarily see both old and new label values in Grafana until the old data ages out of your query time range.
+
+### docker compose config validates compose files, not app configs
+`docker compose config` only validates docker-compose.yml syntax. It does not validate Prometheus, Loki, or Alloy config files. To verify those, restart the container and check `docker logs` for config errors.
+
+### Loki compactor needs delete_request_store when retention is enabled
+Enabling `retention_enabled: true` in the Loki compactor without setting `delete_request_store: filesystem` causes a startup error. Both settings must be present together.
+
+### OPNsense sends syslog in RFC3164, not RFC5424
+Grafana Alloy's syslog listener defaults to RFC5424 parsing. OPNsense sends BSD-style RFC3164 syslog. Without setting `syslog_format = "rfc3164"` in the Alloy config, every incoming log line produces a parse error and no logs reach Loki.
+
+### Use port 5514 for containerized syslog
+Standard syslog uses port 514, but ports below 1024 require root privileges. Since Alloy runs as non-root inside a container, using port 5514 avoids permission issues.
+
+### Promtail is end-of-life — use Grafana Alloy
+Promtail reached end-of-life on March 2, 2026. Grafana Alloy is the official replacement with broader capabilities (metrics, logs, traces), a built-in web UI, and active development. For any new deployment, Alloy is the correct choice.
+
+---
+
 ## General
 
 ### pfctl -d is a nuclear option
 `pfctl -d` disables OPNsense's packet filter entirely, including NAT. This means the firewall stops blocking AND the internet stops working (because NAT is gone). Use it only for emergency troubleshooting and always re-enable with `pfctl -e`.
+
+### cat >> with YAML files is risky
+Appending to YAML files with `cat >>` can place new content in the wrong section of the file. Always verify the full file structure after appending, or use a text editor for YAML modifications.
+
+### Proxmox uses self-signed certificates
+The Proxmox web UI uses HTTPS with a self-signed certificate. Monitoring tools like Uptime Kuma need "ignore TLS errors" enabled to monitor it without false alerts.
+
+### OPNsense web UI uses HTTP, not HTTPS
+By default, OPNsense's web UI listens on HTTP port 80 (not HTTPS 443). Monitoring URLs and browser bookmarks need to use `http://` accordingly.
 
 ### Document everything immediately
 The complexity of VLAN configurations across three systems (OPNsense, Proxmox, switch) makes it easy to lose track of what's configured where. Documenting every change as it happens prevents confusion during troubleshooting.
