@@ -62,21 +62,21 @@ This homelab serves as a hands-on learning environment for network engineering, 
 
 | VLAN ID | Name | Subnet | Gateway | Purpose | Status |
 |---------|------|--------|---------|---------|--------|
-| 1 | Switch Mgmt | 192.168.0.0/24 | N/A | Switch management (untagged) | ✅ Working |
-| 10 | Trusted | 10.0.10.0/24 | 10.0.10.1 | Personal devices | ✅ Working |
-| 20 | Lab | 10.0.20.0/24 | 10.0.20.1 | Lab VMs and services | ✅ Working |
-| 30 | IoT | 10.0.30.0/24 | 10.0.30.1 | Smart home devices | ✅ Working |
-| 40 | Guest | 10.0.40.0/24 | 10.0.40.1 | Guest/untrusted devices | ✅ Working |
-| 50 | Security Cams | 10.0.50.0/24 | 10.0.50.1 | Future camera network | ⏳ Planned |
+| 1 | Switch Mgmt | 192.168.0.0/24 | N/A | Switch management (untagged) | Working |
+| 10 | Trusted | 10.0.10.0/24 | 10.0.10.1 | Personal devices | Working |
+| 20 | Lab | 10.0.20.0/24 | 10.0.20.1 | Lab VMs and services | Working |
+| 30 | IoT | 10.0.30.0/24 | 10.0.30.1 | Smart home devices | Working |
+| 40 | Guest | 10.0.40.0/24 | 10.0.40.1 | Guest/untrusted devices | Working |
+| 50 | Security Cams | 10.0.50.0/24 | 10.0.50.1 | Future camera network | Planned |
 
 ## Firewall Policy
 
 | VLAN | Internet | Trusted | Lab | IoT | Guest | Firewall Mgmt |
 |------|----------|---------|-----|-----|-------|---------------|
-| Trusted (10) | ✅ | — | ✅ | ✅ | ✅ | ✅ |
-| Lab (20) | ✅ | ✅ | — | ❌ | ❌ | ✅ |
-| IoT (30) | ✅ | ❌ | ❌ | — | ❌ | ❌ |
-| Guest (40) | ✅ | ❌ | ❌ | ❌ | — | ❌ |
+| Trusted (10) | Allow | — | Allow | Allow | Allow | Allow |
+| Lab (20) | Allow | Allow | — | Block | Block | Allow |
+| IoT (30) | Allow | Block | Block | — | Block | Block |
+| Guest (40) | Allow | Block | Block | Block | — | Block |
 
 ## Hardware
 
