@@ -32,7 +32,7 @@ OPNsense LAN — vtnet1/net1 (trunks=10;20;30;40)
     |
 JGS516PE Switch (802.1Q enabled, mgmt 192.168.0.239 on VLAN 1)
     ├── Port 1 — Trunk (T on VLANs 10,20,30,40 / U on VLAN 1)
-    ├── Port 2 — Gaming PC (VLAN 10 Trusted — 10.0.10.10)
+    ├── Port 2 — Main PC (VLAN 10 Trusted — 10.0.10.10)
     └── Port 3+ — future devices
 
 Ubuntu Server VM — net0 (tag=20) → vmbr1 → VLAN 20 (10.0.20.20)

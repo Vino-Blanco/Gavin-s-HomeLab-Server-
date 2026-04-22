@@ -63,7 +63,7 @@ Configured 802.1Q VLAN segmentation across OPNsense, the Netgear JGS516PE manage
 
 **Key details:**
 - Switch Port 1: Trunk — Tagged on VLANs 10, 20, 30, 40; Untagged on VLAN 1
-- Switch Port 2: Access — Untagged on VLAN 10, PVID 10 (Gaming PC)
+- Switch Port 2: Access — Untagged on VLAN 10, PVID 10 (Main PC)
 - OPNsense: Creates VLAN sub-interfaces (vlan01-04) on vtnet1 for routing
 - Proxmox vmbr1: VLAN-aware bridge with `bridge-vids 1-4094` and `bridge-pvid 1`
 - Ubuntu Server VM: Proxmox tag=20 (access port on VLAN 20)

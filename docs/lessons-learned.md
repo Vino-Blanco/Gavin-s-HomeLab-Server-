@@ -35,7 +35,7 @@ OPNsense treats traffic destined *to* the firewall itself differently from traff
 `ifreload -a` applies network config changes, but bridge-level changes (especially enabling/disabling VLAN-aware) often don't take effect cleanly without a full host reboot.
 
 ### Proxmox firewall is separate from OPNsense
-Proxmox has its own firewall that can be enabled per-VM NIC. This is completely independent of OPNsense's firewall. Having both active can cause confusing double-filtering. In our setup, we disabled Proxmox's firewall on VM NICs and let OPNsense handle all firewall duties.
+Proxmox has its own firewall that can be enabled per-VM NIC. This is completely independent of OPNsense's firewall. Having both active can cause confusing double-filtering. In this setup, I disabled Proxmox's firewall on VM NICs and let OPNsense handle all firewall duties.
 
 ### qm set requires full NIC definition
 You can't just add `trunks=` to an existing NIC — you must redefine the entire net parameter including model, MAC address, and bridge. Also, semicolons in `trunks=10;20;30;40` must be quoted to prevent bash from interpreting them as command separators.
@@ -45,10 +45,10 @@ You can't just add `trunks=` to an existing NIC — you must redefine the entire
 ## Switch
 
 ### Always factory reset second-hand managed switches
-The JGS516PE came with an old VLAN config that blocked traffic in unexpected ways. I had to factory reset it before our configuration would work. If you buy a used managed switch, reset it first.
+The JGS516PE came with an old VLAN config that blocked traffic in unexpected ways. I had to factory reset it before the configuration would work. If you buy a used managed switch, reset it first.
 
 ### Don't remove yourself from the management VLAN
-When configuring VLANs on the switch, I accidentally removed the management port from VLAN 1, locking ourselves out. The switch had to be factory reset again. Always ensure your management access remains intact before applying VLAN changes.
+When configuring VLANs on the switch, I accidentally removed the management port from VLAN 1, locking myself out. The switch had to be factory reset again. Always ensure management access remains intact before applying VLAN changes.
 
 ### JGS516PE doesn't support management VLAN selection
 The Netgear "Smart Managed Plus" series doesn't allow you to change which VLAN the management interface uses. It's always on VLAN 1 (untagged). This is a hardware/firmware limitation — fully managed switches allow this.
@@ -64,7 +64,7 @@ I initially wrote a custom 14-line snmp.yml config for the SNMP Exporter. It sta
 Running `docker cp` from a running container copies the *mounted* file, not the original from the image. To get the real default config, create a temporary container without starting it (`docker create`), copy the file, then remove the container.
 
 ### Prometheus metric_relabel_configs only apply to new data
-When you rename labels via metric_relabel_configs, the old data in Prometheus still has the original labels. This means you'll temporarily see both old and new label values in Grafana until the old data ages out of your query time range.
+When you rename labels via metric_relabel_configs, the old data in Prometheus still has the original labels. This means you'll temporarily see both old and new label values in Grafana until the old data ages out of the query time range.
 
 ### docker compose config validates compose files, not app configs
 `docker compose config` only validates docker-compose.yml syntax. It does not validate Prometheus, Loki, or Alloy config files. To verify those, restart the container and check `docker logs` for config errors.

@@ -33,7 +33,7 @@ This homelab serves as a hands-on learning environment for network engineering, 
                    T: 10,20,30,40   PVID: 10
                    U: VLAN 1
                                          │
-                                    Gaming PC
+                                     Main PC
                                   (10.0.10.10)
 
               ┌──────── Ubuntu Server VM ────────┐
