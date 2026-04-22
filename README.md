@@ -6,6 +6,30 @@ A production-style homelab built on Proxmox VE, featuring network segmentation w
 
 This homelab serves as a hands-on learning environment for network engineering, systems administration, and security operations. Every component is documented from scratch, and the network is designed with the same principles used in production data center environments.
 
+## Key Accomplishments
+
+- Designed and implemented a segmented network with 4 VLANs, each with its own subnet, DHCP scope, and firewall policy — isolating trusted, lab, IoT, and guest traffic
+- Built and enforced per-VLAN firewall rules on OPNsense, restricting inter-VLAN access based on trust level while maintaining internet connectivity for all segments
+- Deployed a full metrics pipeline (Prometheus, Node Exporter, SNMP Exporter, Grafana) to monitor host performance and network interface traffic across all OPNsense interfaces in real time
+- Integrated SNMP v2c monitoring for OPNsense and relabeled raw interface identifiers to human-readable names (WAN, Trusted, Lab, IoT, Guest) using Prometheus metric_relabel_configs
+- Built centralized log aggregation with Loki and Grafana Alloy, collecting Docker container logs via socket discovery and OPNsense firewall logs via UDP syslog — searchable in Grafana with LogQL
+- Chose Grafana Alloy over Promtail after identifying that Promtail had reached end-of-life, demonstrating awareness of tool lifecycle and the ability to evaluate alternatives
+- Configured OPNsense syslog forwarding and debugged a format mismatch between OPNsense's BSD/RFC3164 output and Alloy's default RFC5424 parser — resolved by setting the correct syslog format in the Alloy config
+
+## Troubleshooting Highlights
+
+Real problems I encountered and solved during this build:
+
+**Subnet conflict broke all routing.** Both Proxmox bridges (vmbr0 and vmbr1) were on the same 192.168.0.0/24 subnet, causing the host to route traffic to the wrong bridge. Resolved by redesigning the network into two subnets — WAN on 192.168.0.0/24 and LAN on 10.0.x.0/24.
+
+**VLAN-aware bridge silently dropped traffic.** Enabling VLAN-aware mode on Proxmox's vmbr1 caused OPNsense to stop receiving tagged traffic because no trunk configuration existed on the VM NIC. Fixed by adding explicit trunk definitions for VLANs 10, 20, 30, and 40.
+
+**Locked myself out of the switch.** While configuring VLANs on the JGS516PE, I accidentally removed the management port from VLAN 1, cutting off all access. Required a physical factory reset to recover. Learned to always verify management access before applying VLAN changes.
+
+**SNMP Exporter returned only scrape-health metrics.** A hand-written 14-line SNMP config started and scraped successfully but produced no real interface data. The fix was extracting the full 61,000-line official default config from the container image, which contained the proper OID-to-metric mappings.
+
+**Syslog logs arrived but were silently discarded.** OPNsense was sending syslog to Alloy, but no logs appeared in Loki. Alloy's logs showed repeated parse errors — it was expecting RFC5424 format while OPNsense sends BSD/RFC3164. Adding `syslog_format = "rfc3164"` to the Alloy config resolved the issue immediately.
+
 ## Architecture
 
 ```
@@ -13,49 +37,49 @@ This homelab serves as a hands-on learning environment for network engineering, 
                            |
                     Cox Router (192.168.0.1)
                            |
-                 eno1 → vmbr0 (WAN Bridge)
+                 eno1 -> vmbr0 (WAN Bridge)
                            |
-              ┌─────────────┴─────────────┐
-              │                           │
+              +-------------+-------------+
+              |                           |
      Proxmox Node                  OPNsense VM
     (192.168.0.50)              WAN: 192.168.0.135
                                 LAN: VLAN Trunk
-                                         │
-                               vtnet1 → vmbr1
+                                         |
+                               vtnet1 -> vmbr1
                              (VLAN-aware bridge)
-                                         │
+                                         |
                               enp2s0f0 (I350-AM2)
-                                         │
+                                         |
                             JGS516PE Managed Switch
-                           ┌──────┴──────┐
+                           +------+------+
                       Port 1          Port 2
                      (Trunk)        (Access)
                    T: 10,20,30,40   PVID: 10
                    U: VLAN 1
-                                         │
+                                         |
                                      Main PC
                                   (10.0.10.10)
 
-              ┌──────── Ubuntu Server VM ────────┐
-              │   tag=20 on vmbr1                │
-              │   10.0.20.20 (VLAN 20 — Lab)     │
-              │                                  │
-              │   Metrics:                       │
-              │   ├── Prometheus (9090)           │
-              │   ├── Node Exporter (9100)        │
-              │   ├── SNMP Exporter (9116)        │
-              │   └── Grafana (3000)              │
-              │                                  │
-              │   Logs:                          │
-              │   ├── Loki (3100)                │
-              │   └── Grafana Alloy (12345)      │
-              │                                  │
-              │   Availability:                  │
-              │   └── Uptime Kuma (3001)          │
-              │                                  │
-              │   Management:                    │
-              │   └── Portainer (9000)            │
-              └──────────────────────────────────┘
+              +-------- Ubuntu Server VM --------+
+              |   tag=20 on vmbr1                |
+              |   10.0.20.20 (VLAN 20 -- Lab)    |
+              |                                  |
+              |   Metrics:                       |
+              |   |-- Prometheus (9090)           |
+              |   |-- Node Exporter (9100)        |
+              |   |-- SNMP Exporter (9116)        |
+              |   +-- Grafana (3000)              |
+              |                                  |
+              |   Logs:                          |
+              |   |-- Loki (3100)                |
+              |   +-- Grafana Alloy (12345)      |
+              |                                  |
+              |   Availability:                  |
+              |   +-- Uptime Kuma (3001)          |
+              |                                  |
+              |   Management:                    |
+              |   +-- Portainer (9000)            |
+              +----------------------------------+
 ```
 
 ## VLAN Segmentation
@@ -73,10 +97,10 @@ This homelab serves as a hands-on learning environment for network engineering, 
 
 | VLAN | Internet | Trusted | Lab | IoT | Guest | Firewall Mgmt |
 |------|----------|---------|-----|-----|-------|---------------|
-| Trusted (10) | Allow | — | Allow | Allow | Allow | Allow |
-| Lab (20) | Allow | Allow | — | Block | Block | Allow |
-| IoT (30) | Allow | Block | Block | — | Block | Block |
-| Guest (40) | Allow | Block | Block | Block | — | Block |
+| Trusted (10) | Allow | -- | Allow | Allow | Allow | Allow |
+| Lab (20) | Allow | Allow | -- | Block | Block | Allow |
+| IoT (30) | Allow | Block | Block | -- | Block | Block |
+| Guest (40) | Allow | Block | Block | Block | -- | Block |
 
 ## Hardware
 
@@ -91,7 +115,7 @@ This homelab serves as a hands-on learning environment for network engineering, 
 ## Virtual Machines
 
 | VM ID | Name | OS | VLAN | IP | Purpose |
-|-------|------|----|------|----|---------|
+|-------|------|----|------|----|---------| 
 | 100 | ubuntu-server | Ubuntu Server 24.04 LTS | 20 (Lab) | 10.0.20.20 | Docker host, monitoring stack |
 | 101 | OPNsense | OPNsense 25.1 | Trunk (10,20,30,40) | 10.0.10.1 (Trusted) | Firewall, router, DHCP, DNS |
 
@@ -111,7 +135,7 @@ The monitoring stack implements two of the three pillars of observability (metri
 | Component | Port | Purpose |
 |-----------|------|---------|
 | Loki | 3100 | Log aggregation and storage (7-day retention) |
-| Grafana Alloy | 12345 | Log collection agent — Docker discovery + OPNsense syslog (UDP 5514) |
+| Grafana Alloy | 12345 | Log collection agent -- Docker discovery + OPNsense syslog (UDP 5514) |
 
 ### Availability
 | Component | Port | Purpose |
@@ -119,9 +143,9 @@ The monitoring stack implements two of the three pillars of observability (metri
 | Uptime Kuma | 3001 | Service availability monitoring (7 monitors) |
 
 ### Grafana Dashboards
-- **Node Exporter Full** — imported (ID 1860), Linux host metrics
-- **OPNsense Monitoring** — custom, 4 panels: per-interface traffic (in/out), interface count, SNMP scrape time. Interface names relabeled from raw IDs to friendly names (WAN, Trusted, Lab, IoT, Guest) via Prometheus metric_relabel_configs
-- **Docker Logs** — custom, 3 panels: live container log stream, filtered error logs, log volume by container
+- **Node Exporter Full** -- imported (ID 1860), Linux host metrics
+- **OPNsense Monitoring** -- custom, 4 panels: per-interface traffic (in/out), interface count, SNMP scrape time. Interface names relabeled from raw IDs to friendly names (WAN, Trusted, Lab, IoT, Guest) via Prometheus metric_relabel_configs
+- **Docker Logs** -- custom, 3 panels: live container log stream, filtered error logs, log volume by container
 
 ### SNMP Monitoring
 - OPNsense Net-SNMP plugin (v2c, community string configured)
@@ -134,21 +158,21 @@ The monitoring stack implements two of the three pillars of observability (metri
 - Enables searching firewall block/pass events in Grafana with LogQL
 
 ### Design Decision: Alloy over Promtail
-Grafana's original log collector (Promtail) reached end-of-life in March 2026. This project uses Grafana Alloy — the current, actively maintained replacement — for both Docker log collection (via Docker socket discovery) and syslog reception.
+Grafana's original log collector (Promtail) reached end-of-life in March 2026. This project uses Grafana Alloy -- the current, actively maintained replacement -- for both Docker log collection (via Docker socket discovery) and syslog reception.
 
 ## Build Progress
 
 - [x] Proxmox VE installation and configuration
 - [x] Ubuntu Server VM with static networking
 - [x] Docker and Portainer deployment
-- [x] OPNsense VM — firewall, routing, DHCP, DNS
+- [x] OPNsense VM -- firewall, routing, DHCP, DNS
 - [x] VLAN segmentation (802.1Q) on switch and OPNsense
 - [x] VLAN-aware bridge with trunk/access port config
 - [x] Inter-VLAN routing verified
 - [x] Firewall rule lockdown (per-VLAN restrictive policies)
 - [x] Monitoring stack (Prometheus + Node Exporter + Grafana + Uptime Kuma)
-- [x] SNMP monitoring — OPNsense interface metrics via SNMP Exporter
-- [x] Log aggregation — Loki + Grafana Alloy (Docker logs + OPNsense syslog)
+- [x] SNMP monitoring -- OPNsense interface metrics via SNMP Exporter
+- [x] Log aggregation -- Loki + Grafana Alloy (Docker logs + OPNsense syslog)
 - [ ] Active Directory lab rebuild
 - [ ] GNS3/EVE-NG for routing protocol labs
 
@@ -183,4 +207,4 @@ Grafana's original log collector (Promtail) reached end-of-life in March 2026. T
 
 ## About
 
-Built by [Gavin White](https://www.linkedin.com/in/gavin-white-812345315) — aspiring Network Engineer with CompTIA Security+ (CE), currently studying for CCNA.
+Built by [Gavin White](https://www.linkedin.com/in/gavin-white-812345315) -- aspiring Network Engineer with CompTIA Security+ (CE), currently studying for CCNA.
