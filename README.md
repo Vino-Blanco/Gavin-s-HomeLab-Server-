@@ -1,6 +1,6 @@
 # My HomeLab Server
 
-A production-style homelab built on Proxmox VE, featuring network segmentation with VLANs, a virtualized OPNsense firewall/router, a full observability stack (metrics + logs), and self-hosted services -- all accessible locally via clean URLs and publicly via a custom domain. Designed to mirror real-world enterprise infrastructure.
+A production-style homelab built on Proxmox VE, featuring network segmentation with VLANs, a virtualized OPNsense firewall/router, a full observability stack (metrics + logs), self-hosted services, and a modded Minecraft game server -- all accessible locally via clean URLs and publicly via a custom domain. Designed to mirror real-world enterprise infrastructure.
 
 **Live:** [gavinwhite.dev](https://gavinwhite.dev) | **Status:** [status.gavinwhite.dev](https://status.gavinwhite.dev)
 
@@ -19,6 +19,7 @@ This homelab serves as a hands-on learning environment for network engineering, 
 - Built a custom portfolio website served via Nginx and exposed it publicly through a Cloudflare Tunnel at gavinwhite.dev -- no port forwarding, no exposed home IP
 - Configured Nginx Proxy Manager with 10 local proxy hosts, enabling clean internal URLs (*.homelab.local) backed by Pi-hole local DNS records
 - Set up Tailscale VPN mesh for secure remote access to the entire homelab from any device, anywhere
+- Deployed a modded Minecraft server (Monifactory, 191 mods) with tiered storage architecture -- NVMe for OS/Docker, HDD for game data -- accessible to friends via Tailscale
 - Chose Grafana Alloy over Promtail after identifying that Promtail had reached end-of-life, demonstrating awareness of tool lifecycle and the ability to evaluate alternatives
 
 ## Troubleshooting Highlights
@@ -36,6 +37,8 @@ Real problems I encountered and solved during this build:
 **Syslog logs arrived but were silently discarded.** OPNsense was sending syslog to Alloy, but no logs appeared in Loki. Alloy's logs showed repeated parse errors -- it was expecting RFC5424 format while OPNsense sends BSD/RFC3164. Adding `syslog_format = "rfc3164"` to the Alloy config resolved the issue immediately.
 
 **Pi-hole container failed to build gravity database.** Docker's internal DNS resolver couldn't reach the internet during Pi-hole's first startup, preventing blocklist downloads. Fixed by adding explicit bootstrap DNS servers (1.1.1.1, 8.8.8.8) via the `dns:` directive in docker-compose, separate from Pi-hole's upstream DNS config.
+
+**Root filesystem hit 100% during Minecraft deployment.** Ubuntu Server's installer only allocated 15GB of a 32GB virtual disk by default. Freed space with `docker system prune`, then expanded the logical volume to use the full disk with `lvextend` and `resize2fs`. Added a separate 200GB HDD-backed virtual disk for game data to implement tiered storage.
 
 ## Architecture
 
@@ -67,9 +70,11 @@ Real problems I encountered and solved during this build:
                                      Main PC
                                   (10.0.10.10)
 
-              +-------- Ubuntu Server VM (8GB RAM) --------+
+              +-------- Ubuntu Server VM (16GB RAM) -------+
               |   tag=20 on vmbr1                          |
               |   10.0.20.20 (VLAN 20 -- Lab)              |
+              |   scsi0: 32GB NVMe (OS/Docker)             |
+              |   scsi1: 200GB HDD  (game data)            |
               |                                            |
               |   Metrics:                                 |
               |   |-- Prometheus (9090)                    |
@@ -89,7 +94,8 @@ Real problems I encountered and solved during this build:
               |   |-- Homepage (3002)                      |
               |   |-- Portfolio (8090)                     |
               |   |-- Nginx Proxy Manager (80, 443, 81)   |
-              |   +-- Cloudflare Tunnel                    |
+              |   |-- Cloudflare Tunnel                    |
+              |   +-- Minecraft (25565)                    |
               |                                            |
               |   Management:                              |
               |   +-- Portainer (9000)                     |
@@ -133,18 +139,19 @@ Pi-hole also serves local DNS records for *.homelab.local domains, which point t
 
 | Component | Details |
 |-----------|---------|
-| Server | HP EliteDesk G4 600 (Intel i5-8500, 32GB RAM, 68GB NVMe + 1TB HDD) |
+| Server | HP EliteDesk G4 600 (Intel i5-8500, 32GB RAM) |
 | Hypervisor | Proxmox VE 9.1.7 |
 | NIC | 10Gtek Intel I350-AM2 dual-port PCIe |
+| Storage | Samsung 970 Evo NVMe (256GB, OS + VMs) + 1TB WD HDD (VM disks + game data) |
 | Switch | Netgear JGS516PE 16-port managed PoE |
 | UPS | CyberPower CP1500AVR |
 
 ## Virtual Machines
 
-| VM ID | Name | OS | VLAN | IP | RAM | Purpose |
-|-------|------|----|------|----|----|--------|
-| 100 | ubuntu-server | Ubuntu Server 24.04 LTS | 20 (Lab) | 10.0.20.20 | 8 GB | Docker host, monitoring + services |
-| 101 | OPNsense | OPNsense 25.1 | Trunk (10,20,30,40) | 10.0.10.1 (Trusted) | 2 GB | Firewall, router, DHCP, DNS |
+| VM ID | Name | OS | VLAN | IP | RAM | Storage | Purpose |
+|-------|------|----|------|----|----|---------|--------|
+| 100 | ubuntu-server | Ubuntu Server 24.04 LTS | 20 (Lab) | 10.0.20.20 | 16 GB | 32GB NVMe + 200GB HDD | Docker host, monitoring + services + Minecraft |
+| 101 | OPNsense | OPNsense 25.1 | Trunk (10,20,30,40) | 10.0.10.1 (Trusted) | 2 GB | 16GB NVMe | Firewall, router, DHCP, DNS |
 
 ## Monitoring & Observability Stack
 
@@ -183,7 +190,17 @@ The monitoring stack implements two of the three pillars of observability (metri
 | Portfolio | 8090 | Custom HTML/CSS personal website (public at gavinwhite.dev) |
 | Nginx Proxy Manager | 80, 443, 81 | Reverse proxy -- 10 local proxy hosts for *.homelab.local |
 | Cloudflare Tunnel | -- | Exposes portfolio and status page to the internet via gavinwhite.dev |
+| Minecraft | 25565 | Monifactory modded server (191 mods, Forge 1.20.1) -- Tailscale access for friends |
 | Portainer | 9000 | Docker container management UI |
+
+## Storage Architecture
+
+| Disk | Proxmox Storage | Size | VM Mount | Purpose |
+|------|----------------|------|----------|---------|
+| scsi0 | local-lvm (NVMe) | 32GB | / (30GB LV) | OS, Docker engine, container configs |
+| scsi1 | hdd-storage (1TB HDD) | 200GB | /mnt/gamedata | Minecraft world data |
+
+NVMe handles OS and Docker for fast random I/O. The HDD handles game server data, which is primarily sequential chunk I/O and doesn't need SSD performance.
 
 ## Access Methods
 
@@ -214,6 +231,7 @@ The monitoring stack implements two of the three pillars of observability (metri
 - [x] Cloudflare Tunnel for public access
 - [x] Tailscale VPN for remote access
 - [x] Public status page (status.gavinwhite.dev)
+- [x] Minecraft Monifactory game server (HDD-backed, Tailscale access)
 - [ ] Active Directory lab rebuild
 - [ ] Jellyfin media server
 - [ ] Ansible infrastructure automation
@@ -253,6 +271,9 @@ The monitoring stack implements two of the three pillars of observability (metri
 - Managed switch configuration (trunk/access ports, PVID)
 - Two-subnet network architecture (WAN/LAN separation)
 - Hypervisor-level virtual networking (VLAN-aware bridges, trunk/access VM ports)
+- Game server hosting and modpack deployment (Minecraft Forge)
+- Tiered storage architecture (NVMe for OS/Docker, HDD for game data)
+- LVM disk management and filesystem expansion
 - Systematic troubleshooting and root cause analysis
 
 ## About
