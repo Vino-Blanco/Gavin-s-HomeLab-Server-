@@ -1,6 +1,8 @@
 # My HomeLab Server
 
-A production-style homelab built on Proxmox VE, featuring network segmentation with VLANs, a virtualized OPNsense firewall/router, a full observability stack (metrics + logs), and containerized services — designed to mirror real-world enterprise infrastructure.
+A production-style homelab built on Proxmox VE, featuring network segmentation with VLANs, a virtualized OPNsense firewall/router, a full observability stack (metrics + logs), and self-hosted services -- all accessible locally via clean URLs and publicly via a custom domain. Designed to mirror real-world enterprise infrastructure.
+
+**Live:** [gavinwhite.dev](https://gavinwhite.dev) | **Status:** [status.gavinwhite.dev](https://status.gavinwhite.dev)
 
 ## Project Overview
 
@@ -8,19 +10,22 @@ This homelab serves as a hands-on learning environment for network engineering, 
 
 ## Key Accomplishments
 
-- Designed and implemented a segmented network with 4 VLANs, each with its own subnet, DHCP scope, and firewall policy — isolating trusted, lab, IoT, and guest traffic
+- Designed and implemented a segmented network with 4 VLANs, each with its own subnet, DHCP scope, and firewall policy -- isolating trusted, lab, IoT, and guest traffic
 - Built and enforced per-VLAN firewall rules on OPNsense, restricting inter-VLAN access based on trust level while maintaining internet connectivity for all segments
 - Deployed a full metrics pipeline (Prometheus, Node Exporter, SNMP Exporter, Grafana) to monitor host performance and network interface traffic across all OPNsense interfaces in real time
 - Integrated SNMP v2c monitoring for OPNsense and relabeled raw interface identifiers to human-readable names (WAN, Trusted, Lab, IoT, Guest) using Prometheus metric_relabel_configs
-- Built centralized log aggregation with Loki and Grafana Alloy, collecting Docker container logs via socket discovery and OPNsense firewall logs via UDP syslog — searchable in Grafana with LogQL
+- Built centralized log aggregation with Loki and Grafana Alloy, collecting Docker container logs via socket discovery and OPNsense firewall logs via UDP syslog -- searchable in Grafana with LogQL
+- Deployed Pi-hole for network-wide DNS ad blocking across all VLANs, with DNS forwarding through OPNsense Unbound (DNSSEC enabled)
+- Built a custom portfolio website served via Nginx and exposed it publicly through a Cloudflare Tunnel at gavinwhite.dev -- no port forwarding, no exposed home IP
+- Configured Nginx Proxy Manager with 10 local proxy hosts, enabling clean internal URLs (*.homelab.local) backed by Pi-hole local DNS records
+- Set up Tailscale VPN mesh for secure remote access to the entire homelab from any device, anywhere
 - Chose Grafana Alloy over Promtail after identifying that Promtail had reached end-of-life, demonstrating awareness of tool lifecycle and the ability to evaluate alternatives
-- Configured OPNsense syslog forwarding and debugged a format mismatch between OPNsense's BSD/RFC3164 output and Alloy's default RFC5424 parser — resolved by setting the correct syslog format in the Alloy config
 
 ## Troubleshooting Highlights
 
 Real problems I encountered and solved during this build:
 
-**Subnet conflict broke all routing.** Both Proxmox bridges (vmbr0 and vmbr1) were on the same 192.168.0.0/24 subnet, causing the host to route traffic to the wrong bridge. Resolved by redesigning the network into two subnets — WAN on 192.168.0.0/24 and LAN on 10.0.x.0/24.
+**Subnet conflict broke all routing.** Both Proxmox bridges (vmbr0 and vmbr1) were on the same 192.168.0.0/24 subnet, causing the host to route traffic to the wrong bridge. Resolved by redesigning the network into two subnets -- WAN on 192.168.0.0/24 and LAN on 10.0.x.0/24.
 
 **VLAN-aware bridge silently dropped traffic.** Enabling VLAN-aware mode on Proxmox's vmbr1 caused OPNsense to stop receiving tagged traffic because no trunk configuration existed on the VM NIC. Fixed by adding explicit trunk definitions for VLANs 10, 20, 30, and 40.
 
@@ -28,7 +33,9 @@ Real problems I encountered and solved during this build:
 
 **SNMP Exporter returned only scrape-health metrics.** A hand-written 14-line SNMP config started and scraped successfully but produced no real interface data. The fix was extracting the full 61,000-line official default config from the container image, which contained the proper OID-to-metric mappings.
 
-**Syslog logs arrived but were silently discarded.** OPNsense was sending syslog to Alloy, but no logs appeared in Loki. Alloy's logs showed repeated parse errors — it was expecting RFC5424 format while OPNsense sends BSD/RFC3164. Adding `syslog_format = "rfc3164"` to the Alloy config resolved the issue immediately.
+**Syslog logs arrived but were silently discarded.** OPNsense was sending syslog to Alloy, but no logs appeared in Loki. Alloy's logs showed repeated parse errors -- it was expecting RFC5424 format while OPNsense sends BSD/RFC3164. Adding `syslog_format = "rfc3164"` to the Alloy config resolved the issue immediately.
+
+**Pi-hole container failed to build gravity database.** Docker's internal DNS resolver couldn't reach the internet during Pi-hole's first startup, preventing blocklist downloads. Fixed by adding explicit bootstrap DNS servers (1.1.1.1, 8.8.8.8) via the `dns:` directive in docker-compose, separate from Pi-hole's upstream DNS config.
 
 ## Architecture
 
@@ -60,26 +67,36 @@ Real problems I encountered and solved during this build:
                                      Main PC
                                   (10.0.10.10)
 
-              +-------- Ubuntu Server VM --------+
-              |   tag=20 on vmbr1                |
-              |   10.0.20.20 (VLAN 20 -- Lab)    |
-              |                                  |
-              |   Metrics:                       |
-              |   |-- Prometheus (9090)           |
-              |   |-- Node Exporter (9100)        |
-              |   |-- SNMP Exporter (9116)        |
-              |   +-- Grafana (3000)              |
-              |                                  |
-              |   Logs:                          |
-              |   |-- Loki (3100)                |
-              |   +-- Grafana Alloy (12345)      |
-              |                                  |
-              |   Availability:                  |
-              |   +-- Uptime Kuma (3001)          |
-              |                                  |
-              |   Management:                    |
-              |   +-- Portainer (9000)            |
-              +----------------------------------+
+              +-------- Ubuntu Server VM (8GB RAM) --------+
+              |   tag=20 on vmbr1                          |
+              |   10.0.20.20 (VLAN 20 -- Lab)              |
+              |                                            |
+              |   Metrics:                                 |
+              |   |-- Prometheus (9090)                    |
+              |   |-- Node Exporter (9100)                 |
+              |   |-- SNMP Exporter (9116)                 |
+              |   +-- Grafana (3000)                       |
+              |                                            |
+              |   Logs:                                    |
+              |   |-- Loki (3100)                          |
+              |   +-- Grafana Alloy (12345, 5514/udp)      |
+              |                                            |
+              |   Availability:                            |
+              |   +-- Uptime Kuma (3001)                   |
+              |                                            |
+              |   Services:                                |
+              |   |-- Pi-hole (53, 8080)                   |
+              |   |-- Homepage (3002)                      |
+              |   |-- Portfolio (8090)                     |
+              |   |-- Nginx Proxy Manager (80, 443, 81)   |
+              |   +-- Cloudflare Tunnel                    |
+              |                                            |
+              |   Management:                              |
+              |   +-- Portainer (9000)                     |
+              +--------------------------------------------+
+
+              Remote Access: Tailscale VPN (100.89.129.32)
+              Public Access: gavinwhite.dev via Cloudflare Tunnel
 ```
 
 ## VLAN Segmentation
@@ -102,6 +119,16 @@ Real problems I encountered and solved during this build:
 | IoT (30) | Allow | Block | Block | -- | Block | Block |
 | Guest (40) | Allow | Block | Block | Block | -- | Block |
 
+## DNS Architecture
+
+All network devices use Pi-hole as their DNS server. Pi-hole blocks ads and trackers at the DNS level, then forwards legitimate queries to OPNsense's Unbound resolver (which validates with DNSSEC) before reaching the internet.
+
+```
+Client Device --> Pi-hole (10.0.20.20:53) --> OPNsense Unbound (10.0.20.1, DNSSEC) --> Internet
+```
+
+Pi-hole also serves local DNS records for *.homelab.local domains, which point to Nginx Proxy Manager for clean internal URLs.
+
 ## Hardware
 
 | Component | Details |
@@ -114,10 +141,10 @@ Real problems I encountered and solved during this build:
 
 ## Virtual Machines
 
-| VM ID | Name | OS | VLAN | IP | Purpose |
-|-------|------|----|------|----|---------| 
-| 100 | ubuntu-server | Ubuntu Server 24.04 LTS | 20 (Lab) | 10.0.20.20 | Docker host, monitoring stack |
-| 101 | OPNsense | OPNsense 25.1 | Trunk (10,20,30,40) | 10.0.10.1 (Trusted) | Firewall, router, DHCP, DNS |
+| VM ID | Name | OS | VLAN | IP | RAM | Purpose |
+|-------|------|----|------|----|----|--------|
+| 100 | ubuntu-server | Ubuntu Server 24.04 LTS | 20 (Lab) | 10.0.20.20 | 8 GB | Docker host, monitoring + services |
+| 101 | OPNsense | OPNsense 25.1 | Trunk (10,20,30,40) | 10.0.10.1 (Trusted) | 2 GB | Firewall, router, DHCP, DNS |
 
 ## Monitoring & Observability Stack
 
@@ -140,25 +167,32 @@ The monitoring stack implements two of the three pillars of observability (metri
 ### Availability
 | Component | Port | Purpose |
 |-----------|------|---------|
-| Uptime Kuma | 3001 | Service availability monitoring (7 monitors) |
+| Uptime Kuma | 3001 | Service availability monitoring with public status page |
 
 ### Grafana Dashboards
 - **Node Exporter Full** -- imported (ID 1860), Linux host metrics
 - **OPNsense Monitoring** -- custom, 4 panels: per-interface traffic (in/out), interface count, SNMP scrape time. Interface names relabeled from raw IDs to friendly names (WAN, Trusted, Lab, IoT, Guest) via Prometheus metric_relabel_configs
 - **Docker Logs** -- custom, 3 panels: live container log stream, filtered error logs, log volume by container
 
-### SNMP Monitoring
-- OPNsense Net-SNMP plugin (v2c, community string configured)
-- SNMP Exporter uses official default config (61k lines, if_mib module)
-- Metrics collected: ifHCInOctets, ifHCOutOctets, ifNumber per interface
+## Self-Hosted Services
 
-### Syslog Integration
-- OPNsense forwards firewall logs via UDP syslog to Grafana Alloy (port 5514)
-- Alloy parses RFC3164 (BSD) format and ships to Loki
-- Enables searching firewall block/pass events in Grafana with LogQL
+| Service | Port | Purpose |
+|---------|------|---------|
+| Pi-hole | 53, 8080 | Network-wide DNS ad blocking for all VLANs |
+| Homepage | 3002 | Internal services dashboard with live status |
+| Portfolio | 8090 | Custom HTML/CSS personal website (public at gavinwhite.dev) |
+| Nginx Proxy Manager | 80, 443, 81 | Reverse proxy -- 10 local proxy hosts for *.homelab.local |
+| Cloudflare Tunnel | -- | Exposes portfolio and status page to the internet via gavinwhite.dev |
+| Portainer | 9000 | Docker container management UI |
 
-### Design Decision: Alloy over Promtail
-Grafana's original log collector (Promtail) reached end-of-life in March 2026. This project uses Grafana Alloy -- the current, actively maintained replacement -- for both Docker log collection (via Docker socket discovery) and syslog reception.
+## Access Methods
+
+| Method | What it provides | Example |
+|--------|-----------------|--------|
+| Local IP:port | Direct access from home network | http://10.0.20.20:3000 |
+| Local DNS (*.homelab.local) | Clean URLs via Pi-hole + NPM | http://grafana.homelab.local |
+| Tailscale | Remote access from anywhere | http://100.89.129.32:3000 |
+| Cloudflare Tunnel | Public internet access | https://gavinwhite.dev |
 
 ## Build Progress
 
@@ -173,8 +207,17 @@ Grafana's original log collector (Promtail) reached end-of-life in March 2026. T
 - [x] Monitoring stack (Prometheus + Node Exporter + Grafana + Uptime Kuma)
 - [x] SNMP monitoring -- OPNsense interface metrics via SNMP Exporter
 - [x] Log aggregation -- Loki + Grafana Alloy (Docker logs + OPNsense syslog)
+- [x] Pi-hole DNS ad blocking (network-wide, all VLANs)
+- [x] Homepage internal dashboard
+- [x] Custom portfolio website (gavinwhite.dev)
+- [x] Nginx Proxy Manager with 10 local proxy hosts
+- [x] Cloudflare Tunnel for public access
+- [x] Tailscale VPN for remote access
+- [x] Public status page (status.gavinwhite.dev)
 - [ ] Active Directory lab rebuild
-- [ ] GNS3/EVE-NG for routing protocol labs
+- [ ] Jellyfin media server
+- [ ] Ansible infrastructure automation
+- [ ] Wazuh SIEM
 
 ## Documentation
 
@@ -183,6 +226,7 @@ Grafana's original log collector (Promtail) reached end-of-life in March 2026. T
 | [Build Phases](docs/build-phases.md) | Detailed walkthrough of each build phase |
 | [Network Architecture](docs/network-architecture.md) | Complete network topology and design decisions |
 | [Lessons Learned](docs/lessons-learned.md) | Troubleshooting experiences and key takeaways |
+| [Screenshots](screenshots/) | 31 annotated screenshots of every major component |
 
 ## Skills Demonstrated
 
@@ -192,6 +236,7 @@ Grafana's original log collector (Promtail) reached end-of-life in March 2026. T
 - Firewall configuration and stateful rule management (OPNsense/pf)
 - Per-VLAN security policies with inter-VLAN traffic control
 - DHCP and DNS server administration
+- DNS sinkhole deployment (Pi-hole) with upstream DNSSEC validation
 - Linux server administration (Ubuntu Server 24.04)
 - Docker containerization and Portainer management
 - Infrastructure monitoring with Prometheus and Grafana
@@ -200,6 +245,11 @@ Grafana's original log collector (Promtail) reached end-of-life in March 2026. T
 - Telemetry collection with Grafana Alloy (Docker discovery + syslog)
 - Syslog integration for firewall log visibility
 - LogQL and PromQL query writing
+- Reverse proxy configuration (Nginx Proxy Manager)
+- Secure remote access (Tailscale VPN mesh)
+- Public hosting via Cloudflare Tunnel (zero-trust, no port forwarding)
+- Custom web development (HTML/CSS portfolio site)
+- Domain management and DNS (Cloudflare)
 - Managed switch configuration (trunk/access ports, PVID)
 - Two-subnet network architecture (WAN/LAN separation)
 - Hypervisor-level virtual networking (VLAN-aware bridges, trunk/access VM ports)
@@ -208,3 +258,5 @@ Grafana's original log collector (Promtail) reached end-of-life in March 2026. T
 ## About
 
 Built by [Gavin White](https://www.linkedin.com/in/gavin-white-812345315) -- aspiring Network Engineer with CompTIA Security+ (CE), currently studying for CCNA.
+
+Portfolio: [gavinwhite.dev](https://gavinwhite.dev) | Status: [status.gavinwhite.dev](https://status.gavinwhite.dev)
